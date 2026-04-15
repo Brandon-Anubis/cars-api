@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "post_write_code": [
+      {
+        "command": "python3 .windsurf/scripts/format_go.py",
+        "show_output": false
+      },
+      {
+        "command": "python3 .windsurf/scripts/check_architecture.py",
+        "show_output": true
+      },
+      {
+        "command": "python3 .windsurf/scripts/check_schema_sync.py",
+        "show_output": true
+      }
+    ],
+    "pre_run_command": [
+      {
+        "command": "python3 .windsurf/scripts/guard_commands.py",
+        "show_output": true
+      }
+    ]
+  }
+}
