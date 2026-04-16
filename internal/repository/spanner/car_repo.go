@@ -20,8 +20,8 @@ type carRepo struct {
 	client *spanner.Client
 }
 
-// NewCarRepo constructs a carRepo using the provided Spanner client.
-func NewCarRepo(client *spanner.Client) repository.CarRepository {
+// NewCarRepository constructs a carRepo using the provided Spanner client.
+func NewCarRepository(client *spanner.Client) repository.CarRepository {
 	return &carRepo{client: client}
 }
 
@@ -35,10 +35,7 @@ var carColumns = []string{
 // Create inserts car into the Cars table.
 // Returns domain.ErrCarAlreadyExists if a row with the same ID already exists.
 func (r *carRepo) Create(ctx context.Context, car *domain.Car) error {
-	m, err := spanner.InsertStruct("Cars", car)
-	if err != nil {
-		return fmt.Errorf("spannerRepo.Create build mutation: %w", err)
-	}
+	m := spanner.InsertMap("Cars", carToMap(car))
 
 	if _, err := r.client.Apply(ctx, []*spanner.Mutation{m}); err != nil {
 		if spanner.ErrCode(err) == codes.AlreadyExists {
@@ -66,15 +63,18 @@ func (r *carRepo) GetByID(ctx context.Context, id string) (*domain.Car, error) {
 		return nil, fmt.Errorf("spannerRepo.GetByID read row: %w", err)
 	}
 
-	var car domain.Car
-	if err := row.ToStruct(&car); err != nil {
-		return nil, fmt.Errorf("spannerRepo.GetByID scan: %w", err)
+	car, err := rowToCar(row)
+	if err != nil {
+		return nil, fmt.Errorf("spannerRepo.GetByID: %w", err)
 	}
 
-	return &car, nil
+	return car, nil
 }
 
 // List returns a page of Cars ordered by CREATED_AT descending, plus the total row count.
+// Both the count and the page queries run under a single ReadOnlyTransaction, providing
+// a consistent timestamp snapshot — the total and the page always reflect the same
+// database state regardless of concurrent writes.
 func (r *carRepo) List(ctx context.Context, limit, offset int) ([]*domain.Car, int, error) {
 	txn := r.client.ReadOnlyTransaction()
 	defer txn.Close()
@@ -111,17 +111,21 @@ func (r *carRepo) listCars(
 	limit, offset int,
 ) ([]*domain.Car, error) {
 	stmt := spanner.Statement{
-		SQL: fmt.Sprintf("SELECT * FROM Cars ORDER BY CREATED_AT DESC LIMIT %d OFFSET %d", limit, offset),
+		SQL: "SELECT ID, MAKE, MODEL, YEAR, COLOR, VIN, MILEAGE, PRICE_CENTS, CREATED_AT, UPDATED_AT FROM Cars ORDER BY CREATED_AT DESC LIMIT @limit OFFSET @offset",
+		Params: map[string]any{
+			"limit":  int64(limit),
+			"offset": int64(offset),
+		},
 	}
 
 	cars := make([]*domain.Car, 0)
 	if err := txn.Query(ctx, stmt).Do(func(row *spanner.Row) error {
-		var car domain.Car
-		if err := row.ToStruct(&car); err != nil {
-			return fmt.Errorf("scan row: %w", err)
+		car, err := rowToCar(row)
+		if err != nil {
+			return fmt.Errorf("spannerRepo.List scan: %w", err)
 		}
 
-		cars = append(cars, &car)
+		cars = append(cars, car)
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("spannerRepo.List query: %w", err)
@@ -135,7 +139,8 @@ func ensureCarExists(ctx context.Context, txn *spanner.ReadWriteTransaction, id 
 		if spanner.ErrCode(err) == codes.NotFound {
 			return domain.ErrCarNotFound
 		}
-		return fmt.Errorf("check existence: %w", err)
+
+		return fmt.Errorf("spannerRepo.ensureCarExists: %w", err)
 	}
 	return nil
 }
@@ -148,12 +153,9 @@ func (r *carRepo) Update(ctx context.Context, car *domain.Car) error {
 			return err
 		}
 
-		m, mutErr := spanner.UpdateStruct("Cars", car)
-		if mutErr != nil {
-			return fmt.Errorf("build mutation: %w", mutErr)
-		}
-
-		return txn.BufferWrite([]*spanner.Mutation{m})
+		return txn.BufferWrite([]*spanner.Mutation{
+			spanner.UpdateMap("Cars", carToMap(car)),
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("spannerRepo.Update: %w", err)

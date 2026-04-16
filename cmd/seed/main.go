@@ -53,6 +53,10 @@ func seed(ctx context.Context, client *spanner.Client, logger *slog.Logger) erro
 	mutations := make([]*spanner.Mutation, 0, len(cars))
 
 	for _, car := range cars {
+		if err := car.Validate(); err != nil {
+			return fmt.Errorf("validate car %s %s: %w", car.Make, car.Model, err)
+		}
+
 		m, err := spanner.InsertOrUpdateStruct("Cars", car)
 		if err != nil {
 			return fmt.Errorf("build mutation for %s %s: %w", car.Make, car.Model, err)
