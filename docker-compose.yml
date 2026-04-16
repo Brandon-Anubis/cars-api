@@ -1,0 +1,30 @@
+services:
+  spanner-emulator:
+    image: gcr.io/cloud-spanner-emulator/emulator
+    container_name: spanner-emulator
+    ports:
+      - "9010:9010"
+      - "9020:9020"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9010"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  cars-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cars-api
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      SPANNER_PROJECT: "cars-project"
+      SPANNER_INSTANCE: "cars-instance"
+      SPANNER_DATABASE: "cars-db"
+      SPANNER_EMULATOR_HOST: "spanner-emulator:9010"
+    depends_on:
+      spanner-emulator:
+        condition: service_healthy
+    restart: on-failure
